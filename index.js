@@ -140,9 +140,57 @@ app.delete("/api/reviews/:id", authMiddleware, (req,res) => {
         const review =db.prepare(`SELECT * FROM reviews WHERE id = ?`).get(id)
         if (!review) return res.status(404).json({error: "Отзыв не найден"})
 
-        if (review.userId !== req.user.id && req.user.role !== "admin")
+        if (review.userId !== req.user.id && req.user.role !== "admin"){
+            return res.status(403).json({error: "Недостаточно прав"})
+        }
+
+        const query = db.prepare(`DELETE FROM reviews WHERE id = ?`)
+        const result = query.run(id)
+
+        if (result.changes === 0 ) return res.status(404).json({error: "Отзыв не найден"})
+
+        res.status(200).json({message:"Отзыв успешно удален"})
+    } catch (error) {
+        console.error(error)
+        res.status(500).json({error:"Ошибка сервера"})
     }
 
+})
+
+app.get("/api/admin/users", authMiddleware, (req, res) => {
+    try {
+        if (req.user.role !== 'admin'){
+            return res.status(403).json({error: "Недостаточно прав"})
+        }
+
+        const data = db.prepare("SELECT id, name, email, role, createdAt FROM users").all()
+        res.json(data)
+    } catch (error){
+        console.error(error)
+    }
+})
+
+app.delete("/api/admin/users/:id", authMiddleware, (res, req) => {
+    const { id } = req.params
+    
+    try{
+        if (req.user.role !== 'admin'){
+            return res.status(403).json({error: "Недостаточно прав"})
+        }
+
+        if (parseInt(id) === req.user.id){
+            return res.status(400).json({error: "Нельзя удалить самого себя"})
+        }
+
+        const query = db.prepare(`DELETE FROM users WHERE id = ?`)
+        const result = query.run(id)
+
+        if (result.changes === 0) return res.status(404).json({error: "Пользователь не найден"})
+
+        res.status(200).json({message:"Пользователь успешно удален"})
+    } catch (error){
+        console.error(error)
+    }
 })
 
 app.listen("3000", () => {
