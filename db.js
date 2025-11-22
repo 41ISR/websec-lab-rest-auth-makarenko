@@ -2,7 +2,9 @@ const Database = require('better-sqlite3')
 
 const db = new Database('database.db')
 
-db.prepare(`
+db.pragma('foreign_keys = ON');
+
+db.exec(`
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
@@ -10,11 +12,11 @@ db.prepare(`
             password TEXT NOT NULL,
             role TEXT DEFAULT 'user',
             createdAt DATATIME DEFAULT CURRENT_TIMESTAMP
-            )`
-        ).run()
+            );`
+        );
 
-db.prepare(`
-        CREATE TABLE IF NOT EXIST book(
+db.exec(`
+        CREATE TABLE IF NOT EXISTS book(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
             author TEXT NOT NULL,
@@ -23,23 +25,23 @@ db.prepare(`
             description TEXT,
             createdBy INTEGER NOT NULL,
             createdAt DATATIME DEFAULT CURRENT_TIMESTAMP,
-            FOREGINKEY (createdBy) REFERENCES users(id) ON DELETE CASCADE
-        )`
-    ).run()
+            FOREIGN KEY (createdBy) REFERENCES users(id) ON DELETE CASCADE
+        );`
+    );
 
 
-db.prepare(`
-        CREATE TABLE IF NOT EXIST review(
+db.exec(`
+        CREATE TABLE IF NOT EXISTS review(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             bookId INTEGER NOT NULL,
             userId INTEGER NOT NULL,
             rating INTEGER,
             comment TEXT NOT NULL,
             createdAt DATATIME DEFAULT CURRENT_TIMESTAMP,
-            FOREGINKEY (bookId) REFERENCES books(id) ON DELETE CASCADE,
-            FOREGINKEY (userId) REFERENCES users(id) ON DELETE CASCADE
-        )`
-    ).run()
+            FOREIGN KEY (bookId) REFERENCES books(id) ON DELETE CASCADE,
+            FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+        );`
+    );
 
 
 module.exports = db

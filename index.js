@@ -18,7 +18,7 @@ const authMiddleware = (req, res, next) => {
         const token = authheader.split(" ")[1]
         const decoded = jwt.verify(token, SECRET)
         
-        const user = db.prepare(`SELECT id, email, name, role FROM users WHERE id = ?`).get(decoded.id)
+        const user = db.prepare(`SELECT id, email, username, role FROM users WHERE id = ?`).get(decoded.id)
         if (!user) return res.status(401).json({error: "Пользователь не найден"})
         
         req.user = user
@@ -30,10 +30,10 @@ const authMiddleware = (req, res, next) => {
 }
 
 app.post("/api/auth/register", (req, res) => {
-    const {email, name, password} =req.body
+    const {email, username, password} =req.body
 
     try{
-        if (!email || !name || !password) {
+        if (!email || !username || !password) {
             return res.status(400).json({ error: "Не хватает данных"})
         }
 
@@ -44,15 +44,14 @@ app.post("/api/auth/register", (req, res) => {
         const syncSalt = bcrypt.genSaltSync(10)
         const hashed = bcrypt.hashSync(password, syncSalt)
 
-        const query = db.prepare(`INSERT INTO users (email, name, password, role) VALUES (?, ?, ?, 'user')`)
+        const query = db.prepare(`INSERT INTO users (email, username, password, role) VALUES (?, ?, ?, 'user')`)
         
-        const info = query.run(email, name, hashed)
+        const info = query.run(email, username, hashed)
         
-        const newUser = db.prepare(`SELECT id, email, name, role, createdAt FROM users WHERE id = ?`).get(info.lastInsertRowid)
+        const newUser = db.prepare(`SELECT id, email, username, role, createdAt FROM users WHERE id = ?`).get(info.lastInsertRowid)
         res.status(201).json(newUser)
     } catch (error) {
         console.error(error)
-        res.status(500).json({error: "Ошибка сервера"})
     }
 })
 
@@ -72,27 +71,26 @@ app.post("/api/auth/login", (req,res) => {
         res.status(200).json({token: token, ...response})
     } catch(error){
         console.error(error)
-        res.status(500).json({error: "Ошибка сервера"})
     }
 })
 
 app.get("/api/auth/profile", authMiddleware, (req, res) => {
-    res,json(res.user)
+    res.json(req.user)
 })
 
 app.get("api/books", (_, res)=> {
-    const data = db.prepare(`SELECT b.*, u.name as createdByName FROM books b LEFT JOIN user u ON b.createdBy = u.id`).all()
+    const data = db.prepare(`SELECT b.*, u.username as createdByName FROM books b LEFT JOIN user u ON b.createdBy = u.id`).all()
     res.json(data)
 })
 
 app.get("/api/books/:id", (req,res) => {
     const {id} = req.params
 
-    const book = db.prepare(`SELECT b.*, u.name as createdByName FROM books b LEFT JOIN user u ON b.createdBy = u.id WHERE b.id = ?`).get(id)
+    const book = db.prepare(`SELECT b.*, u.username as createdByName FROM books b LEFT JOIN user u ON b.createdBy = u.id WHERE b.id = ?`).get(id)
 
     if (!book) return res.status(404).json({error: "Книга не найдена"})
 
-    const reviews =db.prepare(`SELECT r.*, u.name as authorName FROM reviews r LEFT JOIN users u ON r.userId = u.id WHERE r.bookId = ?`).all(id)
+    const reviews =db.prepare(`SELECT r.*, u.username as authorName FROM reviews r LEFT JOIN users u ON r.userId = u.id WHERE r.bookId = ?`).all(id)
 
     res.json({...book, reviews})
 })
