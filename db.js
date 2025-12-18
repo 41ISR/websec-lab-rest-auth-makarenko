@@ -16,7 +16,7 @@ db.exec(`
         );
 
 db.exec(`
-        CREATE TABLE IF NOT EXISTS book(
+        CREATE TABLE IF NOT EXISTS books(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
             author TEXT NOT NULL,

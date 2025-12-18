@@ -1,196 +1,334 @@
-const bcrypt = require("bcryptjs")
-const jwt = require("jsonwebtoken")
-const db = require("./db")
-const express = require("express")
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const db = require("./db");
+const express = require("express");
 
-const SECRET = "secret-key"
+const SECRET = "this-is-for-jwt";
 
-const app = express()
-app.use(express.json())
+const app = express();
+
+app.use(express.json());
+
 
 const authMiddleware = (req, res, next) => {
-    const authheader =req.headers.authorization
-    if (!authheader) res.status(401).json({error:"Нет токена авторизации"})
-    if (!(authheader.split(" ")[1]))res.status(401).json({error: "Неверный формат токена"})
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "Нет токена авторизации" });
 
+    const parts = authHeader.split(" ");
+    if (parts.length !== 2 || parts[0] !== "Bearer") return res.status(401).json({ error: "Неверный формат токена" });
 
     try {
-        const token = authheader.split(" ")[1]
-        const decoded = jwt.verify(token, SECRET)
-        
-        const user = db.prepare(`SELECT id, email, username, role FROM users WHERE id = ?`).get(decoded.id)
-        if (!user) return res.status(401).json({error: "Пользователь не найден"})
-        
-        req.user = user
-        next()
-    } catch(error) {
-        console.error(error)
-        res.status(401).json({error: "Неправильный токен"})
+        const token = parts[1];
+        const decoded = jwt.verify(token, SECRET);
+        // Fetch full user from DB without password
+        const user = db.prepare("SELECT id, username, email, role, createdAt FROM users WHERE id = ?").get(decoded.id);
+        if (!user) return res.status(401).json({ error: "Неправильный токен" });
+        req.user = user;
+        next();
+    } catch (error) {
+        console.error(error);
+        res.status(401).json({ error: "Неправильный токен" });
     }
-}
+};
+
+const adminMiddleware = (req, res, next) => {
+    if (!req.user || req.user.role !== "admin") {
+        return res.status(403).json({ error: "Доступ запрещен: недостаточно прав" });
+    }
+    next();
+};
+
 
 app.post("/api/auth/register", (req, res) => {
-    const {email, username, password} =req.body
+    const { username, email, password } = req.body;
 
-    try{
-        if (!email || !username || !password) {
-            return res.status(400).json({ error: "Не хватает данных"})
+    try {
+        if (!username || !email || !password) {
+            return res.status(400).json({ error: "Не хватает данных" });
         }
 
-        const existingUser = db.prepare(`SELEcT id FROM users WHERE email = ?`).get(email)
-        if (existingUser){
-            return res.status(400).json({error: "Пользователь с таким email уже существует"})
+        
+        const existingUser = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+        if (existingUser) {
+            return res.status(409).json({ error: "Email уже зарегистрирован" });
         }
-        const syncSalt = bcrypt.genSaltSync(10)
-        const hashed = bcrypt.hashSync(password, syncSalt)
 
-        const query = db.prepare(`INSERT INTO users (email, username, password, role) VALUES (?, ?, ?, 'user')`)
-        
-        const info = query.run(email, username, hashed)
-        
-        const newUser = db.prepare(`SELECT id, email, username, role, createdAt FROM users WHERE id = ?`).get(info.lastInsertRowid)
-        res.status(201).json(newUser)
+        const salt = bcrypt.genSaltSync(10);
+        const hashedPassword = bcrypt.hashSync(password, salt);
+
+        const insert = db.prepare(
+            "INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, 'user')"
+        );
+        const result = insert.run(username, email, hashedPassword);
+
+        const newUser = db.prepare("SELECT id, username, email, role, createdAt FROM users WHERE id = ?").get(result.lastInsertRowid);
+        res.status(201).json(newUser);
     } catch (error) {
-        console.error(error)
+        console.error(error);
+        res.status(500).json({ error: "Ошибка сервера" });
     }
-})
+});
 
-app.post("/api/auth/login", (req,res) => {
-    try{
-        const {email, password} = req.body
 
-        const user = db.prepare(`SELECT * FROM users WHERE email = ?`).get(email)
-        if (!user) return res.status(401).json({error: "Неправильные данные"})
+app.post("/api/auth/login", (req, res) => {
+    const { email, password } = req.body;
 
-        const valid = bcrypt.compareSync(password, user.password)
-        if (!valid) return res.status(401).json({error: "Неправильные данные"})
+    try {
+        if (!email || !password) {
+            return res.status(400).json({ error: "Не хватает данных" });
+        }
 
-        const token = jwt.sign({id: user.id, email: user.email}, SECRET, {expiresIn: `24h`})
+        const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+        if (!user) {
+            return res.status(401).json({ error: "Неправильные данные" });
+        }
 
-        const {password: p, ...response} = user
-        res.status(200).json({token: token, ...response})
-    } catch(error){
-        console.error(error)
+        const valid = bcrypt.compareSync(password, user.password);
+        if (!valid) {
+            return res.status(401).json({ error: "Неправильные данные" });
+        }
+
+        const token = jwt.sign({ id: user.id, username: user.username, email: user.email, role: user.role }, SECRET, { expiresIn: "24h" });
+
+        const { password: _, ...responseUser } = user;
+        res.status(200).json({ token, ...responseUser });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Ошибка сервера" });
     }
-})
+});
+
 
 app.get("/api/auth/profile", authMiddleware, (req, res) => {
-    res.json(req.user)
-})
+    res.status(200).json(req.user);
+});
 
-app.get("api/books", (_, res)=> {
-    const data = db.prepare(`SELECT b.*, u.username as createdByName FROM books b LEFT JOIN user u ON b.createdBy = u.id`).all()
-    res.json(data)
-})
 
-app.get("/api/books/:id", (req,res) => {
-    const {id} = req.params
+app.get("/api/books", (req, res) => {
+    const { genre, author } = req.query;
+    let query = "SELECT * FROM book";
+    const params = [];
 
-    const book = db.prepare(`SELECT b.*, u.username as createdByName FROM books b LEFT JOIN user u ON b.createdBy = u.id WHERE b.id = ?`).get(id)
+    if (genre || author) {
+        query += " WHERE";
+        if (genre) {
+            query += " genre = ?";
+            params.push(genre);
+        }
+        if (author) {
+            if (genre) query += " AND";
+            query += " author = ?";
+            params.push(author);
+        }
+    }
 
-    if (!book) return res.status(404).json({error: "Книга не найдена"})
+    const books = db.prepare(query).all(...params);
+    res.status(200).json(books);
+});
 
-    const reviews =db.prepare(`SELECT r.*, u.username as authorName FROM reviews r LEFT JOIN users u ON r.userId = u.id WHERE r.bookId = ?`).all(id)
 
-    res.json({...book, reviews})
-})
+app.get("/api/books/:id", (req, res) => {
+    const { id } = req.params;
+
+    const book = db.prepare("SELECT * FROM book WHERE id = ?").get(id);
+    if (!book) {
+        return res.status(404).json({ error: "Книга не найдена" });
+    }
+
+    const reviews = db.prepare("SELECT * FROM review WHERE bookId = ?").all(id);
+    res.status(200).json({ ...book, reviews });
+});
+
+
+app.post("/api/books", authMiddleware, (req, res) => {
+    const { title, author, year, genre, description } = req.body;
+
+    try {
+        if (!title || !author || !year || !genre) {
+            return res.status(400).json({ error: "Не хватает данных" });
+        }
+
+        const insert = db.prepare(
+            "INSERT INTO book (title, author, year, genre, description, createdBy) VALUES (?, ?, ?, ?, ?, ?)"
+        );
+        const result = insert.run(title, author, year, genre, description || "", req.user.id);
+
+        const newBook = db.prepare("SELECT * FROM book WHERE id = ?").get(result.lastInsertRowid);
+        res.status(201).json(newBook);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Ошибка сервера" });
+    }
+});
+
+
+app.put("/api/books/:id", authMiddleware, (req, res) => {
+    const { id } = req.params;
+    const { title, author, year, genre, description } = req.body;
+
+    try {
+        const book = db.prepare("SELECT * FROM book WHERE id = ?").get(id);
+        if (!book) {
+            return res.status(404).json({ error: "Книга не найдена" });
+        }
+
+        if (book.createdBy !== req.user.id && req.user.role !== "admin") {
+            return res.status(403).json({ error: "Доступ запрещен" });
+        }
+
+        let updateQuery = "UPDATE book SET";
+        const params = [];
+        if (title) {
+            updateQuery += " title = ?,";
+            params.push(title);
+        }
+        if (author) {
+            updateQuery += " author = ?,";
+            params.push(author);
+        }
+        if (year) {
+            updateQuery += " year = ?,";
+            params.push(year);
+        }
+        if (genre) {
+            updateQuery += " genre = ?,";
+            params.push(genre);
+        }
+        if (description !== undefined) {
+            updateQuery += " description = ?,";
+            params.push(description);
+        }
+
+        if (params.length === 0) {
+            return res.status(400).json({ error: "Нет данных для обновления" });
+        }
+
+        updateQuery = updateQuery.slice(0, -1) + " WHERE id = ?";
+        params.push(id);
+
+        db.prepare(updateQuery).run(...params);
+        const updatedBook = db.prepare("SELECT * FROM book WHERE id = ?").get(id);
+        res.status(200).json(updatedBook);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Ошибка сервера" });
+    }
+});
+
+
+app.delete("/api/books/:id", authMiddleware, (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const book = db.prepare("SELECT * FROM book WHERE id = ?").get(id);
+        if (!book) {
+            return res.status(404).json({ error: "Книга не найдена" });
+        }
+
+        if (book.createdBy !== req.user.id && req.user.role !== "admin") {
+            return res.status(403).json({ error: "Доступ запрещен" });
+        }
+
+        db.prepare("DELETE FROM book WHERE id = ?").run(id);
+        res.status(200).json({ message: "Книга удалена" });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Ошибка сервера" });
+    }
+});
+
+
+app.post("/api/books/:id/reviews", authMiddleware, (req, res) => {
+    const { id: bookId } = req.params;
+    const { rating, comment } = req.body;
+
+    try {
+        if (!rating || !comment || rating < 1 || rating > 5) {
+            return res.status(400).json({ error: "Неверные данные: rating должен быть от 1 до 5, comment обязателен" });
+        }
+
+        const book = db.prepare("SELECT * FROM book WHERE id = ?").get(bookId);
+        if (!book) {
+            return res.status(404).json({ error: "Книга не найдена" });
+        }
+
+        const insert = db.prepare(
+            "INSERT INTO review (bookId, userId, rating, comment) VALUES (?, ?, ?, ?)"
+        );
+        const result = insert.run(bookId, req.user.id, rating, comment);
+
+        const newReview = db.prepare("SELECT * FROM review WHERE id = ?").get(result.lastInsertRowid);
+        res.status(201).json(newReview);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Ошибка сервера" });
+    }
+});
+
 
 app.get("/api/books/:id/reviews", (req, res) => {
-    const {id} =req.params
-    const data = db.prepare(`SELECT r.*, u.name as authorName FROM reviews r LEFT JOIN users u ON r.userId = u.id WHERE r.bookId = ?`).all(id)
-    res.json(data)
-})
+    const { id } = req.params;
 
-app.post("/api/books/:id/reviews", authMiddleware, (res,req)=>{
-    const {id} = req.params
-    const {rating, comment} = req.body 
-    const userId = req.user.id
-
-    try{
-        if (!rating || !comment){
-            return res.status(400).json({error:"Не хватает данных"})
-        }
-        const book = db.prepare(`SELECT id FROM books WHERE id = ?`).get(id)
-        if (!book) return res.status(404).json({error: "Книга не найдена"})
-        
-        const existingReview = db.prepare(`SELECT id FROM reviews WHERE bookId = ? AND userId = ?`).get(id, userId)
-        if (existingReview){
-            return res.status(400).json({error: "Вы уже оставляли отзыв на эту книгу"})
-        }
-
-        if (raring < 1 || rating > 5){
-            return res.status(400).json({error:"Рейтинг должен быть от 0 до 5"})
-        }
-
-        const query = db.prepare(`INSERT INTO reviews (bookId, userId, rating, comment) VALUES (?,?,?,?)`)
-        const info = query.run(id, userId, rating, comment)
-        const newReview = db.prepare(`SELECT r.*, u.name as authorName FROM reviews r LEFT JOIN users u ON r.userId = u.id WHERE r.id = ?`).get(info.lastInsertRowid)
-        res.status(201).json(newReview)
-    } catch (error){
-        console.error(error)
-    }
-})
-
-app.delete("/api/reviews/:id", authMiddleware, (req,res) => {
-    const {id} = req.params
-
-    try{
-        const review =db.prepare(`SELECT * FROM reviews WHERE id = ?`).get(id)
-        if (!review) return res.status(404).json({error: "Отзыв не найден"})
-
-        if (review.userId !== req.user.id && req.user.role !== "admin"){
-            return res.status(403).json({error: "Недостаточно прав"})
-        }
-
-        const query = db.prepare(`DELETE FROM reviews WHERE id = ?`)
-        const result = query.run(id)
-
-        if (result.changes === 0 ) return res.status(404).json({error: "Отзыв не найден"})
-
-        res.status(200).json({message:"Отзыв успешно удален"})
-    } catch (error) {
-        console.error(error)
-        res.status(500).json({error:"Ошибка сервера"})
+    const book = db.prepare("SELECT * FROM book WHERE id = ?").get(id);
+    if (!book) {
+        return res.status(404).json({ error: "Книга не найдена" });
     }
 
-})
+    const reviews = db.prepare("SELECT * FROM review WHERE bookId = ?").all(id);
+    res.status(200).json(reviews);
+});
 
-app.get("/api/admin/users", authMiddleware, (req, res) => {
+
+app.delete("/api/reviews/:id", authMiddleware, (req, res) => {
+    const { id } = req.params;
+
     try {
-        if (req.user.role !== 'admin'){
-            return res.status(403).json({error: "Недостаточно прав"})
+        const review = db.prepare("SELECT * FROM review WHERE id = ?").get(id);
+        if (!review) {
+            return res.status(404).json({ error: "Отзыв не найден" });
         }
 
-        const data = db.prepare("SELECT id, name, email, role, createdAt FROM users").all()
-        res.json(data)
-    } catch (error){
-        console.error(error)
+        if (review.userId !== req.user.id && req.user.role !== "admin") {
+            return res.status(403).json({ error: "Доступ запрещен" });
+        }
+
+        db.prepare("DELETE FROM review WHERE id = ?").run(id);
+        res.status(200).json({ message: "Отзыв удален" });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Ошибка сервера" });
     }
-})
+});
 
-app.delete("/api/admin/users/:id", authMiddleware, (res, req) => {
-    const { id } = req.params
-    
-    try{
-        if (req.user.role !== 'admin'){
-            return res.status(403).json({error: "Недостаточно прав"})
+
+
+app.get("/api/admin/users", authMiddleware, adminMiddleware, (req, res) => {
+    const users = db.prepare("SELECT id, username, email, role, createdAt FROM users").all();
+    res.status(200).json(users);
+});
+
+
+app.delete("/api/admin/users/:id", authMiddleware, adminMiddleware, (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const user = db.prepare("SELECT * FROM users WHERE id = ?").get(id);
+        if (!user) {
+            return res.status(404).json({ error: "Пользователь не найден" });
         }
 
-        if (parseInt(id) === req.user.id){
-            return res.status(400).json({error: "Нельзя удалить самого себя"})
+        if (user.id === req.user.id) {
+            return res.status(400).json({ error: "Нельзя удалить самого себя" });
         }
 
-        const query = db.prepare(`DELETE FROM users WHERE id = ?`)
-        const result = query.run(id)
-
-        if (result.changes === 0) return res.status(404).json({error: "Пользователь не найден"})
-
-        res.status(200).json({message:"Пользователь успешно удален"})
-    } catch (error){
-        console.error(error)
+        db.prepare("DELETE FROM users WHERE id = ?").run(id);
+        res.status(200).json({ message: "Пользователь удален" });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Ошибка сервера" });
     }
-})
+});
 
-app.listen("3000", () => {
-    console.log("Сервер запущен на порту 3000")
-})
+app.listen(3000, () => {
+    console.log("Сервер запущен на порту 3000");
+});
